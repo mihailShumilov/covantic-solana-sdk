@@ -1,0 +1,79 @@
+{
+  "name": "@covantic/solana-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the Covantic AI Agent Insurance Protocol on Solana.",
+  "keywords": [
+    "solana",
+    "anchor",
+    "insurance",
+    "defi",
+    "ai-agent",
+    "solana-agent-kit",
+    "covantic"
+  ],
+  "license": "MIT",
+  "author": "Covantic",
+  "homepage": "https://covantic.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mihailShumilov/covantic-solana-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mihailShumilov/covantic-solana-sdk/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./agent-kit": {
+      "types": "./dist/agent-kit/index.d.ts",
+      "import": "./dist/agent-kit/index.js"
+    },
+    "./idl": {
+      "types": "./dist/idl/index.d.ts",
+      "import": "./dist/idl/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src tests",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "prepublishOnly": "pnpm clean && pnpm build"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/spl-token": "^0.4.8",
+    "@solana/web3.js": "^1.95.0",
+    "bn.js": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.1.5",
+    "@types/node": "^22.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "@solana/web3.js": "^1.95.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
