@@ -36,12 +36,7 @@ describe('calculatePremium', () => {
 
   it('applies premium multiplier (caution mode +25%)', () => {
     const base = calculatePremium(usdcToLamports(1_000), SECONDS_PER_YEAR, RiskTier.LOW, 10_000);
-    const caution = calculatePremium(
-      usdcToLamports(1_000),
-      SECONDS_PER_YEAR,
-      RiskTier.LOW,
-      12_500,
-    );
+    const caution = calculatePremium(usdcToLamports(1_000), SECONDS_PER_YEAR, RiskTier.LOW, 12_500);
     expect(caution.premiumLamports).toBe((base.premiumLamports * 12_500n) / 10_000n);
   });
 

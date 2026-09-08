@@ -31,11 +31,15 @@ export function calculatePremium(
   durationSeconds: number,
   riskTier: Exclude<RiskTier, RiskTier.EXTREME>,
   premiumMultiplierBps = 10_000,
+  /** Flat price of the envelope from the attestation, base units. Zero when derived. */
+  envelopeFlatPremium: bigint | number = 0n,
 ): PremiumQuote {
   const annualBps = PREMIUM_BPS[riskTier];
   const annualPremium = (coverageLamports * BigInt(annualBps)) / 10_000n;
   const base = (annualPremium * BigInt(durationSeconds)) / BigInt(SECONDS_PER_YEAR);
-  const adjusted = (base * BigInt(premiumMultiplierBps)) / 10_000n;
+  // The envelope's price is added before the multiplier, as create_policy does.
+  const withEnvelope = base + BigInt(envelopeFlatPremium);
+  const adjusted = (withEnvelope * BigInt(premiumMultiplierBps)) / 10_000n;
   const premiumLamports = adjusted < MIN_PREMIUM_LAMPORTS ? MIN_PREMIUM_LAMPORTS : adjusted;
   return {
     premiumLamports,

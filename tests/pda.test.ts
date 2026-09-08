@@ -2,8 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { PublicKey } from '@solana/web3.js';
 import {
   COVANTIC_PROGRAM_ID,
+  deriveAgentMandatePda,
+  deriveAuthorityCheckpointPda,
+  deriveBalanceCheckpointPda,
   deriveConfigPda,
+  deriveGovernanceBaselinePda,
   derivePolicyPda,
+  derivePolicyPriceTermsPda,
   deriveStakerPda,
   deriveVaultPda,
   PDA_SEEDS,
@@ -51,5 +56,33 @@ describe('PDA derivation', () => {
     const holder = PublicKey.unique();
     const bigId = 2n ** 33n;
     expect(() => derivePolicyPda(holder, bigId)).not.toThrow();
+  });
+
+  it('keys every per-policy account by the policy PDA with its own seed', () => {
+    const holder = PublicKey.unique();
+    const [policy] = derivePolicyPda(holder, 7);
+    const derived = {
+      mandate: deriveAgentMandatePda(policy)[0],
+      checkpoint: deriveBalanceCheckpointPda(policy)[0],
+      authorityCheckpoint: deriveAuthorityCheckpointPda(policy)[0],
+      priceTerms: derivePolicyPriceTermsPda(policy)[0],
+      baseline: deriveGovernanceBaselinePda(policy)[0],
+    };
+    const expected = (seed: Buffer) =>
+      PublicKey.findProgramAddressSync([seed, policy.toBuffer()], COVANTIC_PROGRAM_ID)[0];
+    expect(derived.mandate.equals(expected(PDA_SEEDS.AGENT_MANDATE))).toBe(true);
+    expect(derived.checkpoint.equals(expected(PDA_SEEDS.CHECKPOINT))).toBe(true);
+    expect(derived.authorityCheckpoint.equals(expected(PDA_SEEDS.AUTHORITY_CHECKPOINT))).toBe(true);
+    expect(derived.priceTerms.equals(expected(PDA_SEEDS.POLICY_PRICE_TERMS))).toBe(true);
+    expect(derived.baseline.equals(expected(PDA_SEEDS.GOVERNANCE_BASELINE))).toBe(true);
+    // Five distinct accounts.
+    expect(new Set(Object.values(derived).map((k) => k.toBase58())).size).toBe(5);
+  });
+
+  it('uses the seeds the program declares', () => {
+    expect(PDA_SEEDS.AUTHORITY_CHECKPOINT.toString()).toBe('covantic_authority_checkpoint');
+    expect(PDA_SEEDS.POLICY_PRICE_TERMS.toString()).toBe('covantic_price_terms');
+    expect(PDA_SEEDS.AGENT_MANDATE.toString()).toBe('covantic_agent_mandate');
+    expect(PDA_SEEDS.CHECKPOINT.toString()).toBe('covantic_checkpoint');
   });
 });

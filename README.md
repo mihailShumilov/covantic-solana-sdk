@@ -52,21 +52,46 @@ const client = new CovanticClient({
 
 const USDC_DEVNET = new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU');
 
-// 1) Get a quote (reads on-chain multiplier)
-const quote = await client.quote({
+// 1) Estimate premium locally for a hypothetical tier (doesn't commit to one).
+const estimate = await client.quote({
   coverageLamports: usdcToLamports(1_000),
   durationSeconds: 7 * 24 * 3_600,
   riskTier: RiskTier.MEDIUM,
 });
-console.log('Premium USDC:', Number(quote.premiumLamports) / 1e6);
+console.log('Premium USDC (if MEDIUM):', Number(estimate.premiumLamports) / 1e6);
 
-// 2) Buy a policy
+// 2) Publish the real tier on-chain. The off-chain risk API does this via
+// POST /api/policies/quote — the oracle signs an attestation PDA that
+// `create_policy` requires. Without it the transaction below will fail.
+const quote = await fetch('https://covantic.org/api/policies/quote', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    coverageAmount: Number(usdcToLamports(1_000)),
+    durationSeconds: 7 * 24 * 3_600,
+    agentAddress: wallet.publicKey.toBase58(),
+  }),
+}).then((r) => r.json());
+
+// 3) Buy the policy. Tier comes from the oracle-signed attestation — buyers
+// cannot pass one — and the envelope (`mandate`) the quote returned has to be
+// handed back unchanged: the program hashes it and compares with the
+// attestation. The purchase also writes four per-policy PDAs (mandate,
+// balance checkpoint, authority checkpoint, price terms); the client derives
+// them.
 const { instruction } = await client.createPolicyIx({
   coverageLamports: usdcToLamports(1_000),
   durationSeconds: 7 * 24 * 3_600,
-  riskTier: RiskTier.MEDIUM,
   agentAddress: wallet.publicKey,
   usdcMint: USDC_DEVNET,
+  mandate: {
+    maxSingleOutflow: quote.mandate.maxSingleOutflowRaw,
+    maxWindowOutflow: quote.mandate.maxWindowOutflowRaw,
+    windowSeconds: quote.mandate.windowSeconds,
+    minRetainedBalance: quote.mandate.minRetainedBalanceRaw,
+    allowedCounterparties: quote.mandate.allowedCounterparties.map((k) => new PublicKey(k)),
+    allowedPrograms: quote.mandate.allowedPrograms.map((k) => new PublicKey(k)),
+  },
 });
 const signature = await client.sendTransaction([instruction]);
 console.log('Policy tx:', signature);
@@ -78,15 +103,20 @@ Every builder returns `{ instruction, accounts }` so callers can compose, simula
 
 | Method | Instruction | Notes |
 | --- | --- | --- |
-| `createPolicyIx(params)` | `create_policy` | Transfers USDC premium, creates Policy PDA |
+| `createPolicyIx(params)` | `create_policy` | Transfers USDC premium, creates the Policy PDA plus its mandate, balance checkpoint, authority checkpoint and price terms. Requires a live oracle-signed `RiskAttestation` PDA and the `mandate` the quote returned. |
+| `upsertAttestationIx(params)` | `upsert_attestation` | Oracle-only. Writes/refreshes the tier, the envelope commitment and the price terms that `create_policy` consumes. |
 | `cancelPolicyIx(addr, mint)` | `cancel_policy` | Refund = remaining × premium × 80% |
-| `submitClaimIx(params)` | `submit_claim` | Holder-only, marks policy ClaimPending |
+| `submitClaimIx(params)` | `submit_claim` | Holder-only, marks policy ClaimPending. `triggerTxSignature` is the Base58 signature of the incident; the program validates it on chain. |
 | `stakeIx(params)` | `stake` | Deposit USDC into insurance pool |
 | `requestUnstakeIx()` | `request_unstake` | Starts 48-hour cooldown |
 | `executeUnstakeIx(mint)` | `execute_unstake` | After cooldown, returns principal + rewards |
 | `claimRewardsIx(mint)` | `claim_rewards` | Claim accumulated rewards without unstaking |
-| `verifyAndPayoutIx(params)` | `verify_and_payout` | Oracle-only, pays out a claim |
-| `expirePolicyIx(addr)` | `expire_policy` | Permissionless crank |
+| `expirePolicyIx(addr)` | `expire_policy` | Permissionless crank. Also closes a `ClaimPending` policy once its lock and a seven-day resolution grace have elapsed. |
+
+There is no `verify_and_payout` any more. Every payout goes through the trigger's proof
+instruction (`verify_and_payout_v2`, `_exploit`, `_governance`, `_agent_error`), which the oracle
+backend drives with evidence the program checks for itself. An SDK consumer files claims and reads
+the evidence record the settlement left behind (`deriveClaimEvidencePda` and siblings).
 
 ## Read methods
 
@@ -96,7 +126,18 @@ const vault  = await client.getVault();
 const policy = await client.getPolicy(holder, policyId);
 const all    = await client.listPolicies(holder);
 const staker = await client.getStakerPosition(wallet);
+const attestation = await client.getAttestation(agentAddress);
+const terms = await client.getPriceTerms(policyAddress);
+const authority = await client.getAuthorityCheckpoint(policyAddress);
 ```
+
+## PDAs
+
+`derive*Pda` helpers cover every account the program keys by policy: `deriveAgentMandatePda`,
+`deriveBalanceCheckpointPda`, `deriveAuthorityCheckpointPda`, `derivePolicyPriceTermsPda`,
+`deriveGovernanceBaselinePda` and the four evidence records. `agentMandateCommitment(envelope)`
+computes the hash the oracle attests and `create_policy` checks; it matches the program's
+`AgentMandate::commitment()` byte for byte.
 
 ## Events
 

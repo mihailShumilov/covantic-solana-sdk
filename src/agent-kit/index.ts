@@ -127,37 +127,89 @@ export function covanticToolkit(
     {
       name: 'covantic_buy_insurance',
       description:
-        'Purchase a Covantic insurance policy. Builds and sends an on-chain transaction that transfers USDC premium and creates the policy PDA.',
+        "Purchase a Covantic insurance policy. The risk tier is derived server-side from the agent's latest on-chain assessment — callers do not pick it. Requires `riskApiUrl` to be configured so the backend can publish the oracle-signed attestation that `create_policy` depends on.",
       parameters: {
         type: 'object',
         properties: {
           coverageUsdc: { type: 'number' },
           durationSeconds: { type: 'number' },
-          riskTier: { type: 'number', enum: [0, 1, 2] },
           agentAddress: {
             type: 'string',
             description: 'Wallet address of the agent to insure (can equal caller wallet).',
           },
         },
-        required: ['coverageUsdc', 'durationSeconds', 'riskTier', 'agentAddress'],
+        required: ['coverageUsdc', 'durationSeconds', 'agentAddress'],
         additionalProperties: false,
       },
       execute: async (input: unknown) => {
-        const { coverageUsdc, durationSeconds, riskTier, agentAddress } = input as {
+        const { coverageUsdc, durationSeconds, agentAddress } = input as {
           coverageUsdc: number;
           durationSeconds: number;
-          riskTier: 0 | 1 | 2;
           agentAddress: string;
         };
+        if (!riskApiUrl) {
+          throw new Error(
+            'covantic_buy_insurance requires riskApiUrl — the backend publishes the on-chain risk attestation required by create_policy.',
+          );
+        }
+        // Hit the quote endpoint. Side effects: (1) server derives tier from
+        // the latest assessment, (2) oracle publishes (or refreshes) the
+        // on-chain attestation PDA, (3) quote is returned. Without this step
+        // the create_policy instruction would fail with AccountNotInitialized.
+        const quoteRes = await fetch(`${riskApiUrl.replace(/\/$/, '')}/api/policies/quote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            coverageAmount: usdcToLamports(coverageUsdc),
+            durationSeconds,
+            agentAddress,
+          }),
+        });
+        if (!quoteRes.ok) {
+          const body = (await quoteRes.json().catch(() => ({}))) as {
+            error?: string;
+            code?: string;
+          };
+          throw new Error(
+            `Quote failed (${body.code ?? quoteRes.status}): ${body.error ?? quoteRes.statusText}`,
+          );
+        }
+        const quote = (await quoteRes.json()) as {
+          riskTier: RiskTier;
+          premiumAmount: number;
+          mandate: {
+            maxSingleOutflowRaw: number;
+            maxWindowOutflowRaw: number;
+            windowSeconds: number;
+            minRetainedBalanceRaw: number;
+            allowedCounterparties: string[];
+            allowedPrograms: string[];
+          };
+        };
+        // The envelope the quote priced, handed back unchanged: the program
+        // recomputes its hash and compares it with the attestation.
         const { instruction } = await client.createPolicyIx({
           coverageLamports: usdcToLamports(coverageUsdc),
           durationSeconds,
-          riskTier: riskTier as Exclude<RiskTier, RiskTier.EXTREME>,
           agentAddress: new PublicKey(agentAddress),
           usdcMint,
+          mandate: {
+            maxSingleOutflow: quote.mandate.maxSingleOutflowRaw,
+            maxWindowOutflow: quote.mandate.maxWindowOutflowRaw,
+            windowSeconds: quote.mandate.windowSeconds,
+            minRetainedBalance: quote.mandate.minRetainedBalanceRaw,
+            allowedCounterparties: quote.mandate.allowedCounterparties.map((k) => new PublicKey(k)),
+            allowedPrograms: quote.mandate.allowedPrograms.map((k) => new PublicKey(k)),
+          },
         });
         const signature = await client.sendTransaction([instruction]);
-        return { signature, coverageUsdc, durationSeconds, riskTier };
+        return {
+          signature,
+          coverageUsdc,
+          durationSeconds,
+          riskTier: quote.riskTier,
+          premiumUsdc: quote.premiumAmount / 1_000_000,
+        };
       },
     },
 
@@ -210,7 +262,7 @@ export function covanticToolkit(
         const { instruction } = await client.submitClaimIx({
           policyAddress: new PublicKey(policyAddress),
           triggerType: triggerType as Exclude<TriggerType, TriggerType.NONE>,
-          triggerTxSignature: Buffer.from(triggerTxSignature, 'base64'),
+          triggerTxSignature,
         });
         const signature = await client.sendTransaction([instruction]);
         return { signature };
